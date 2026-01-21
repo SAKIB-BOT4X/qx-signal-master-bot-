@@ -16,7 +16,6 @@ const STATS_KEY = 'quotex_master_stats_v21';
 const ASSET_KEY = 'quotex_selected_asset_v21';
 const HISTORY_COUNT = 300;
 
-// উন্নত প্রিমিয়াম ইন্ডিকেটর লজিক
 const calculatePremiumIndicators = (candles: Candle[]) => {
   if (candles.length < 50) return null;
   const closes = candles.map(c => c.close);
@@ -36,7 +35,6 @@ const calculatePremiumIndicators = (candles: Candle[]) => {
   const ema21 = getEMA(closes, 21);
   const sma20 = getSMA(closes, 20);
   
-  // ATR for Volatility
   const trs = candles.slice(-14).map((c, i, arr) => {
     if (i === 0) return c.high - c.low;
     return Math.max(c.high - c.low, Math.abs(c.high - arr[i-1].close), Math.abs(c.low - arr[i-1].close));
@@ -74,6 +72,7 @@ const ASSETS: Asset[] = [
 
 const App: React.FC = () => {
   const [hasKey, setHasKey] = useState<boolean | null>(null);
+  const [manualKey, setManualKey] = useState('');
   const [showIndicators, setShowIndicators] = useState(false);
   const [selectedAsset, setSelectedAsset] = useState<Asset>(() => {
     const saved = localStorage.getItem(ASSET_KEY);
@@ -96,19 +95,24 @@ const App: React.FC = () => {
     return saved ? JSON.parse(saved) : { totalSignals: 0, correctSignals: 0, incorrectSignals: 0 };
   });
 
+  // API Key চেক করার লজিক (Vercel + Local + Manual)
   useEffect(() => {
     const checkKey = async () => {
-      if (typeof window.aistudio !== 'undefined') {
+      const vercelKey = import.meta.env.VITE_API_KEY;
+      const storedKey = localStorage.getItem('GEMINI_API_KEY');
+      
+      if (vercelKey || storedKey) {
+        setHasKey(true);
+      } else if (typeof window.aistudio !== 'undefined') {
         const result = await window.aistudio.hasSelectedApiKey();
         setHasKey(result);
       } else {
-        setHasKey(!!import.meta.env.VITE_API_KEY);
+        setHasKey(false);
       }
     };
     checkKey();
   }, []);
 
-  // টাইমার এবং ০০ সেকেন্ড পাবলিশ লজিক
   useEffect(() => {
     const interval = setInterval(() => {
       const now = new Date();
@@ -118,7 +122,6 @@ const App: React.FC = () => {
       const remaining = 60 - seconds;
       setCandleCountdown(remaining === 60 ? 0 : remaining);
 
-      // ঠিক ০০ সেকেন্ডে সিগন্যাল পাবলিশ হবে
       if (seconds === 0 && pendingSignal) {
         setCurrentSignal(pendingSignal);
         setPendingSignal(null);
@@ -145,7 +148,6 @@ const App: React.FC = () => {
     try {
       const indicators = calculatePremiumIndicators(candles);
       const result = await analyzeMarket(candles, selectedAsset.name, indicators);
-      // সিগন্যাল পেন্ডিং রাখা হলো
       setPendingSignal(result);
     } catch (e) {
       setIsAnalyzing(false);
@@ -178,25 +180,38 @@ const App: React.FC = () => {
     return () => socket.close();
   }, [selectedAsset.id]);
 
-  const handleVote = (id: string, result: 'TRUE' | 'FALSE') => {
-    if (currentSignal?.id !== id || currentSignal.voted) return;
-    setCurrentSignal(p => p ? { ...p, voted: true, result } : null);
-    setStats(p => {
-      const s = { ...p, totalSignals: p.totalSignals + 1, [result === 'TRUE' ? 'correctSignals' : 'incorrectSignals']: p[result === 'TRUE' ? 'correctSignals' : 'incorrectSignals'] + 1 };
-      localStorage.setItem(STATS_KEY, JSON.stringify(s));
-      return s;
-    });
+  const handleManualKeySubmit = () => {
+    if (manualKey.length > 20) {
+      localStorage.setItem('GEMINI_API_KEY', manualKey);
+      setHasKey(true);
+      window.location.reload();
+    }
   };
 
   const winRate = stats.totalSignals > 0 ? ((stats.correctSignals / stats.totalSignals) * 100).toFixed(1) : "0.0";
 
+  // যদি Key না থাকে তবে এই স্ক্রিনটি দেখাবে
   if (hasKey === false) {
     return (
-      <div className="min-h-screen bg-[#0b0e11] flex flex-col items-center justify-center p-8 text-center">
-        <h1 className="text-xl font-bold mb-4 uppercase tracking-widest">SAKIB AI SIGNAL</h1>
-        <button onClick={() => window.aistudio.openSelectKey().then(() => setHasKey(true))} className="bg-indigo-600 px-8 py-4 rounded-2xl font-bold text-white shadow-xl active:scale-95 transition-all">
-          CONNECT API KEY
-        </button>
+      <div className="min-h-screen bg-[#0b0e11] flex flex-col items-center justify-center p-8 text-center text-white">
+        <h1 className="text-2xl font-black mb-6 uppercase tracking-widest text-indigo-500">SAKIB AI SIGNAL</h1>
+        <div className="w-full max-w-xs space-y-4">
+          <p className="text-gray-400 text-xs uppercase font-bold tracking-tighter">Enter Gemini API Key to Start</p>
+          <input 
+            type="password" 
+            placeholder="Paste API Key Here..." 
+            className="w-full bg-white/5 border border-white/10 p-4 rounded-xl text-sm outline-none focus:border-indigo-500 transition-all"
+            value={manualKey}
+            onChange={(e) => setManualKey(e.target.value)}
+          />
+          <button 
+            onClick={handleManualKeySubmit}
+            className="w-full bg-indigo-600 hover:bg-indigo-500 py-4 rounded-xl font-bold transition-all shadow-lg active:scale-95"
+          >
+            ACTIVATE SYSTEM
+          </button>
+          <a href="https://aistudio.google.com/app/apikey" target="_blank" className="block text-[10px] text-indigo-400 font-bold uppercase underline">Get Free Key From Google</a>
+        </div>
       </div>
     );
   }
@@ -281,10 +296,18 @@ const App: React.FC = () => {
         )}
       </div>
 
-      <SignalDashboard signal={currentSignal} isAnalyzing={isAnalyzing} onVote={handleVote} />
+      <SignalDashboard signal={currentSignal} isAnalyzing={isAnalyzing} onVote={(id, res) => {
+          if (currentSignal?.id !== id || currentSignal.voted) return;
+          setCurrentSignal(p => p ? { ...p, voted: true, result: res } : null);
+          setStats(p => {
+              const s = { ...p, totalSignals: p.totalSignals + 1, [res === 'TRUE' ? 'correctSignals' : 'incorrectSignals']: p[res === 'TRUE' ? 'correctSignals' : 'incorrectSignals'] + 1 };
+              localStorage.setItem(STATS_KEY, JSON.stringify(s));
+              return s;
+          });
+      }} />
 
       <div className="mt-6 text-center opacity-30">
-        <button onClick={() => window.aistudio.openSelectKey()} className="text-[9px] text-gray-400 uppercase font-black tracking-widest hover:text-indigo-400">⚙️ SYNC SYSTEM</button>
+        <button onClick={() => { localStorage.removeItem('GEMINI_API_KEY'); window.location.reload(); }} className="text-[9px] text-gray-400 uppercase font-black tracking-widest hover:text-indigo-400">⚙️ RESET KEY</button>
       </div>
     </div>
   );
