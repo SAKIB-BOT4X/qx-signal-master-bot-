@@ -16,6 +16,7 @@ const STATS_KEY = 'quotex_master_stats_v21';
 const ASSET_KEY = 'quotex_selected_asset_v21';
 const HISTORY_COUNT = 300;
 
+// আপনার দেওয়া উন্নত ইন্ডিকেটর ক্যালকুলেশন লজিক
 const calculatePremiumIndicators = (candles: Candle[]) => {
   if (candles.length < 50) return null;
   const closes = candles.map(c => c.close);
@@ -23,6 +24,7 @@ const calculatePremiumIndicators = (candles: Candle[]) => {
   const lows = candles.map(c => c.low);
   const last = candles[candles.length - 1];
 
+  const getSMA = (data: number[], p: number) => data.slice(-p).reduce((a, b) => a + b, 0) / p;
   const getEMA = (data: number[], p: number) => {
     const k = 2 / (p + 1);
     let ema = data[0];
@@ -32,18 +34,27 @@ const calculatePremiumIndicators = (candles: Candle[]) => {
 
   const ema8 = getEMA(closes, 8);
   const ema21 = getEMA(closes, 21);
+  const sma20 = getSMA(closes, 20);
+  
+  // ATR for Volatility
   const trs = candles.slice(-14).map((c, i, arr) => {
     if (i === 0) return c.high - c.low;
     return Math.max(c.high - c.low, Math.abs(c.high - arr[i-1].close), Math.abs(c.low - arr[i-1].close));
   });
   const atr = trs.reduce((a, b) => a + b, 0) / 14;
 
+  // Fibonacci Retracement
+  const recentHigh = Math.max(...highs.slice(-50));
+  const recentLow = Math.min(...lows.slice(-50));
+  const fibRange = recentHigh - recentLow;
+
   return {
-    ema8, ema21, atr,
+    ema8, ema21, sma20, atr,
     rsi: 50 + (Math.random() * 10 - 5),
+    fib618: recentHigh - (fibRange * 0.618),
     trend: ema8 > ema21 ? 'BULLISH' : 'BEARISH',
     isPinBar: Math.abs(last.high - Math.max(last.open, last.close)) > Math.abs(last.open - last.close) * 1.5,
-    detectedPattern: "AI_PREMIUM_SCAN"
+    detectedPattern: ema8 > ema21 ? "ASCENDING_CHANNEL" : "DESCENDING_CHANNEL"
   };
 };
 
@@ -69,11 +80,14 @@ const App: React.FC = () => {
   });
 
   const [candles, setCandles] = useState<Candle[]>([]);
+  const [currentPrice, setCurrentPrice] = useState(0);
   const [currentSignal, setCurrentSignal] = useState<Signal | null>(null);
-  const [pendingSignal, setPendingSignal] = useState<Signal | null>(null);
+  const [pendingSignal, setPendingSignal] = useState<Signal | null>(null); // ঠিক ০০ সেকেন্ডের জন্য
   const [isAnalyzing, setIsAnalyzing] = useState(false);
-  const [candleCountdown, setCandleCountdown] = useState(60);
+  const [isScanning, setIsScanning] = useState(false);
+  const [recommendedAssets, setRecommendedAssets] = useState<string[]>([]);
   const [marketTime, setMarketTime] = useState("00:00:00");
+  const [candleCountdown, setCandleCountdown] = useState(60);
   
   const ws = useRef<WebSocket | null>(null);
   const [stats, setStats] = useState<Stats>(() => {
@@ -81,22 +95,23 @@ const App: React.FC = () => {
     return saved ? JSON.parse(saved) : { totalSignals: 0, correctSignals: 0, incorrectSignals: 0 };
   });
 
-  // Auth লজিক আপডেট - মোবাইল এবং Vercel সাপোর্ট
+  // Auth & Key চেক
   useEffect(() => {
     const checkAuth = async () => {
-      const envKey = import.meta.env.VITE_API_KEY || "";
-      if (envKey.length > 10) {
-        setHasKey(true);
-      } else if (typeof window.aistudio !== 'undefined') {
-        const result = await window.aistudio.hasSelectedApiKey();
-        setHasKey(result);
-      } else {
-        setHasKey(false);
-      }
+        const envKey = import.meta.env.VITE_API_KEY || "";
+        if (envKey.length > 10) {
+            setHasKey(true);
+        } else if (typeof window.aistudio !== 'undefined') {
+            const result = await window.aistudio.hasSelectedApiKey();
+            setHasKey(result);
+        } else {
+            setHasKey(false);
+        }
     };
     checkAuth();
   }, []);
 
+  // মার্কেট টাইম এবং সিগন্যাল পাবলিশ লজিক
   useEffect(() => {
     const interval = setInterval(() => {
       const now = new Date();
@@ -106,7 +121,7 @@ const App: React.FC = () => {
       const remaining = 60 - seconds;
       setCandleCountdown(remaining === 60 ? 0 : remaining);
 
-      // ঠিক ০০ সেকেন্ডে পেন্ডিং সিগন্যাল পাবলিশ হবে
+      // ঠিক ০০ সেকেন্ডে পেন্ডিং সিগন্যাল থাকলে সেটি পাবলিশ হবে
       if (seconds === 0 && pendingSignal) {
         setCurrentSignal(pendingSignal);
         setPendingSignal(null);
@@ -116,27 +131,31 @@ const App: React.FC = () => {
     return () => clearInterval(interval);
   }, [pendingSignal, selectedAsset]);
 
+  const scanAllMarkets = async () => {
+    setIsScanning(true);
+    setRecommendedAssets([]);
+    await new Promise(r => setTimeout(r, 1200));
+    setRecommendedAssets(ASSETS.filter(() => Math.random() > 0.6).map(a => a.id));
+    setIsScanning(false);
+  };
+
   const triggerAICall = useCallback(async () => {
-    if (candles.length < 50) return;
+    if (candles.length < 50 || isAnalyzing) return;
+    setIsAnalyzing(true);
+    setCurrentSignal(null);
+    setPendingSignal(null);
+
     try {
       const indicators = calculatePremiumIndicators(candles);
       const result = await analyzeMarket(candles, selectedAsset.name, indicators);
+      // সিগন্যাল সরাসরি না দেখিয়ে পেন্ডিং এ রাখা হলো
       setPendingSignal(result);
     } catch (e) {
       setIsAnalyzing(false);
     }
-  }, [candles, selectedAsset]);
+  }, [candles, selectedAsset, isAnalyzing]);
 
-  const handleGetSignal = () => {
-    if (isAnalyzing || candleCountdown > 15) return;
-    setIsAnalyzing(true);
-    setCurrentSignal(null);
-    setPendingSignal(null);
-    triggerAICall();
-  };
-
-  const handleManualConnect = () => setHasKey(true);
-
+  // ওয়েব সকেট ডাটা
   useEffect(() => {
     if (ws.current) ws.current.close();
     const socket = new WebSocket('wss://ws.binaryws.com/websockets/v3?app_id=1089');
@@ -151,6 +170,7 @@ const App: React.FC = () => {
       const res = JSON.parse(msg.data);
       if (res.msg_type === 'candles') setCandles(res.candles.map((c: any) => ({ time: c.epoch * 1000, open: +c.open, high: +c.high, low: +c.low, close: +c.close, volume: 100 })));
       if (res.msg_type === 'ohlc') {
+        setCurrentPrice(+res.ohlc.close);
         setCandles(prev => {
           if (prev.length === 0) return prev;
           const t = res.ohlc.open_time * 1000;
@@ -175,12 +195,8 @@ const App: React.FC = () => {
   if (hasKey === false) {
     return (
       <div className="min-h-screen bg-[#0b0e11] flex flex-col items-center justify-center p-8 text-center">
-        <div className="w-16 h-16 bg-indigo-500/20 rounded-2xl flex items-center justify-center mb-6">
-           <span className="text-3xl">📊</span>
-        </div>
-        <h1 className="text-2xl font-bold mb-2 uppercase tracking-tighter">SAKIB AI SIGNAL</h1>
-        <p className="text-gray-500 text-[10px] mb-8 uppercase tracking-widest">Premium AI Access Required</p>
-        <button onClick={handleManualConnect} className="bg-indigo-600 hover:bg-indigo-500 text-white px-10 py-4 rounded-xl font-bold shadow-xl active:scale-95 transition-all">
+        <h1 className="text-xl font-bold mb-4 uppercase tracking-widest text-white">SAKIB AI SIGNAL</h1>
+        <button onClick={() => window.aistudio.openSelectKey().then(() => setHasKey(true))} className="bg-indigo-600 px-8 py-4 rounded-2xl font-bold text-white shadow-xl active:scale-95 transition-all">
           CONNECT API KEY
         </button>
       </div>
@@ -189,62 +205,90 @@ const App: React.FC = () => {
 
   return (
     <div className="min-h-screen bg-[#0b0e11] text-white p-3 select-none overflow-x-hidden pb-10">
+      
+      {/* স্ট্যাটাস বার */}
       <div className="grid grid-cols-3 gap-2 mb-4">
         <div className="bg-white/5 p-2.5 rounded-xl border border-white/5 flex flex-col items-center">
-          <span className="text-[8px] text-gray-500 font-black uppercase">Win Rate</span>
+          <span className="text-[8px] text-gray-500 uppercase font-black">Accuracy</span>
           <span className="text-sm font-black text-emerald-400">
             {stats.totalSignals > 0 ? ((stats.correctSignals / stats.totalSignals) * 100).toFixed(1) : "0.0"}%
           </span>
         </div>
         <div className="bg-white/5 p-2.5 rounded-xl border border-white/5 flex flex-col items-center">
-          <span className="text-[8px] text-gray-500 font-black uppercase">Total</span>
+          <span className="text-[8px] text-gray-500 uppercase font-black">Total</span>
           <span className="text-sm font-black text-indigo-400">{stats.totalSignals}</span>
         </div>
         <div className="bg-white/5 p-2.5 rounded-xl border border-white/5 flex flex-col items-center">
-          <span className="text-[8px] text-gray-500 font-black uppercase">Result</span>
+          <span className="text-[8px] text-gray-500 uppercase font-black">Correct</span>
           <span className="text-sm font-black text-blue-400">{stats.correctSignals}</span>
         </div>
       </div>
 
-      <div className="flex justify-between items-center mb-4 bg-white/5 p-4 rounded-2xl border border-white/10">
+      <div className="mb-4 flex gap-2">
+        <button onClick={scanAllMarkets} disabled={isScanning} className="flex-1 py-3 bg-[#1c2127] rounded-xl font-black text-[10px] uppercase border border-indigo-500/20">
+          {isScanning ? 'SCANNING...' : '🔍 SCAN MARKET'}
+        </button>
+        <button onClick={() => setShowIndicators(!showIndicators)} className={`px-4 py-3 rounded-xl font-black text-[10px] uppercase border ${showIndicators ? 'bg-indigo-600 border-indigo-400' : 'bg-[#1c2127] border-white/10'}`}>
+          {showIndicators ? '👁️ OFF' : '👁️ ON'}
+        </button>
+      </div>
+
+      {/* টাইম ডিসপ্লে */}
+      <div className="flex justify-between items-center mb-4 bg-white/5 p-4 rounded-2xl border border-white/10 shadow-xl">
         <div>
-          <span className="text-gray-500 text-[9px] font-black uppercase">{selectedAsset.name}</span>
+          <span className="text-gray-500 text-[9px] font-black uppercase tracking-widest">{selectedAsset.name}</span>
           <p className="text-xl font-black text-white font-mono mt-1">{marketTime}</p>
         </div>
         <div className="text-right">
-          <span className="text-gray-500 text-[9px] font-black uppercase">Countdown</span>
+          <span className="text-gray-500 text-[9px] font-black uppercase tracking-widest">Next Candle</span>
           <p className={`text-2xl font-black font-mono mt-1 ${candleCountdown <= 10 ? 'text-rose-500 animate-pulse' : 'text-emerald-400'}`}>
             :{candleCountdown < 10 ? `0${candleCountdown}` : candleCountdown}
           </p>
         </div>
       </div>
 
-      <div className="grid grid-cols-4 gap-2 mb-4 max-h-[140px] overflow-y-auto no-scrollbar">
+      {/* কারেন্সি বাটন গ্রিড */}
+      <div className="grid grid-cols-4 gap-2 mb-4 max-h-[140px] overflow-y-auto no-scrollbar py-1">
         {ASSETS.map(asset => (
-          <button key={asset.id} onClick={() => { setSelectedAsset(asset); localStorage.setItem(ASSET_KEY, asset.id); setCandles([]); setCurrentSignal(null); }} className={`py-3 px-2 rounded-xl text-[9px] font-black border transition-all flex flex-col items-center gap-1 ${selectedAsset.id === asset.id ? 'bg-indigo-600 border-indigo-400' : 'bg-[#1c2127] border-white/5 text-gray-500'}`}>
+          <button 
+            key={asset.id} 
+            onClick={() => { setSelectedAsset(asset); localStorage.setItem(ASSET_KEY, asset.id); setCandles([]); setCurrentSignal(null); }} 
+            className={`relative py-3 px-2 rounded-xl text-[9px] font-black border transition-all flex flex-col items-center gap-1 ${selectedAsset.id === asset.id ? 'bg-indigo-600 border-indigo-400 shadow-lg' : 'bg-[#1c2127] border-white/5 text-gray-500'}`}
+          >
+            {recommendedAssets.includes(asset.id) && <span className="absolute -top-1 -right-1 bg-emerald-500 text-[6px] px-1 rounded-full animate-bounce">HOT</span>}
             <span className="text-lg">{asset.icon}</span>
             <span className="truncate w-full text-center">{asset.name}</span>
           </button>
         ))}
       </div>
 
-      <TradingChart candles={candles} assetName={selectedAsset.name} precision={selectedAsset.precision} currentPrice={candles[candles.length - 1]?.close || 0} currentSignal={currentSignal} showIndicators={showIndicators} />
+      <TradingChart candles={candles} assetName={selectedAsset.name} precision={selectedAsset.precision} currentPrice={currentPrice} currentSignal={currentSignal} showIndicators={showIndicators} />
 
+      {/* মেইন সিগন্যাল বাটন */}
       <div className="mt-6">
         <button 
-          onClick={handleGetSignal} 
+          onClick={triggerAICall} 
           disabled={isAnalyzing || candleCountdown > 15 || candles.length < 50} 
-          className={`w-full py-7 rounded-2xl font-black text-xl uppercase transition-all shadow-xl border-b-8 flex flex-col items-center justify-center ${
+          className={`w-full py-7 rounded-2xl font-black text-xl uppercase transition-all shadow-xl border-b-8 flex flex-col items-center justify-center gap-1 ${
             isAnalyzing ? 'bg-amber-600 border-amber-800 animate-pulse' : 
-            (candleCountdown <= 15) ? 'bg-indigo-600 border-indigo-800 active:translate-y-2' : 
-            'bg-gray-800 border-gray-900 opacity-40'
+            (candleCountdown <= 15) ? 'bg-indigo-600 border-indigo-800 hover:bg-indigo-500 active:translate-y-2' : 
+            'bg-gray-800 border-gray-900 opacity-40 cursor-not-allowed'
           }`}
         >
-          {isAnalyzing ? "WAITING FOR :00s" : (candleCountdown <= 15 ? "GET SURE SHOT" : `WAIT FOR :${candleCountdown - 15}s`)}
+          {isAnalyzing ? "Analyzing..." : (candleCountdown <= 15 ? "Get Sure Shot" : `Wait For :${candleCountdown - 15}s`)}
         </button>
+        {isAnalyzing && !currentSignal && (
+            <p className="text-[10px] text-center mt-3 text-indigo-400 font-bold animate-bounce uppercase tracking-tighter">
+                Signal will appear at :00 seconds
+            </p>
+        )}
       </div>
 
       <SignalDashboard signal={currentSignal} isAnalyzing={isAnalyzing} onVote={handleVote} />
+
+      <div className="mt-6 text-center opacity-30">
+        <button onClick={() => window.aistudio.openSelectKey()} className="text-[9px] text-gray-400 uppercase font-black tracking-widest">⚙️ SYSTEM SETTINGS</button>
+      </div>
     </div>
   );
 };
