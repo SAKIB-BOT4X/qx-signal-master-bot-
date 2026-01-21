@@ -1,0 +1,5 @@
+{
+  "name": "Quotex Candlestick Master",
+  "description": "A high-performance trading signal simulator and candlestick pattern analyzer.",
+  "requestFramePermissions": []
+}
