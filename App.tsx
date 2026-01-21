@@ -16,7 +16,6 @@ const STATS_KEY = 'quotex_master_stats_v21';
 const ASSET_KEY = 'quotex_selected_asset_v21';
 const HISTORY_COUNT = 300;
 
-// প্রিমিয়াম ইন্ডিকেটর লজিক (অপরিবর্তিত রাখা হয়েছে)
 const calculatePremiumIndicators = (candles: Candle[]) => {
   if (candles.length < 50) return null;
   const closes = candles.map(c => c.close);
@@ -39,21 +38,15 @@ const calculatePremiumIndicators = (candles: Candle[]) => {
   });
   const atr = trs.reduce((a, b) => a + b, 0) / 14;
 
-  const recentHigh = Math.max(...highs.slice(-50));
-  const recentLow = Math.min(...lows.slice(-50));
-  const fibRange = recentHigh - recentLow;
-
   return {
     ema8, ema21, atr,
     rsi: 50 + (Math.random() * 10 - 5),
-    fib618: recentHigh - (fibRange * 0.618),
     trend: ema8 > ema21 ? 'BULLISH' : 'BEARISH',
     isPinBar: Math.abs(last.high - Math.max(last.open, last.close)) > Math.abs(last.open - last.close) * 1.5,
-    detectedPattern: "PREMIUM_ANALYSIS"
+    detectedPattern: "AI_PREMIUM_SCAN"
   };
 };
 
-// আপনার সম্পূর্ণ কারেন্সি লিস্ট
 const ASSETS = [
   { id: 'frxEURUSD', name: 'EUR/USD', icon: '🇪🇺', precision: 5, timezone: 'Europe/Berlin', category: 'Forex' },
   { id: 'frxGBPUSD', name: 'GBP/USD', icon: '🇬🇧', precision: 5, timezone: 'Europe/London', category: 'Forex' },
@@ -88,22 +81,22 @@ const App: React.FC = () => {
     return saved ? JSON.parse(saved) : { totalSignals: 0, correctSignals: 0, incorrectSignals: 0 };
   });
 
-  // অটো-অথ চেক এবং Vercel Env সাপোর্ট
+  // Auth লজিক আপডেট - মোবাইল এবং Vercel সাপোর্ট
   useEffect(() => {
     const checkAuth = async () => {
-      if (typeof window.aistudio !== 'undefined') {
+      const envKey = import.meta.env.VITE_API_KEY || "";
+      if (envKey.length > 10) {
+        setHasKey(true);
+      } else if (typeof window.aistudio !== 'undefined') {
         const result = await window.aistudio.hasSelectedApiKey();
         setHasKey(result);
       } else {
-        // Vercel Environment Variable চেক
-        const envKey = import.meta.env.VITE_API_KEY;
-        setHasKey(!!envKey);
+        setHasKey(false);
       }
     };
     checkAuth();
   }, []);
 
-  // টাইমার এবং ঠিক ০০ সেকেন্ডে সিগন্যাল পাবলিশ করার লজিক
   useEffect(() => {
     const interval = setInterval(() => {
       const now = new Date();
@@ -113,7 +106,7 @@ const App: React.FC = () => {
       const remaining = 60 - seconds;
       setCandleCountdown(remaining === 60 ? 0 : remaining);
 
-      // ঠিক ০০ সেকেন্ডে সিগন্যাল দেখানো হবে
+      // ঠিক ০০ সেকেন্ডে পেন্ডিং সিগন্যাল পাবলিশ হবে
       if (seconds === 0 && pendingSignal) {
         setCurrentSignal(pendingSignal);
         setPendingSignal(null);
@@ -128,27 +121,22 @@ const App: React.FC = () => {
     try {
       const indicators = calculatePremiumIndicators(candles);
       const result = await analyzeMarket(candles, selectedAsset.name, indicators);
-      // সিগন্যাল রেডি করে পেন্ডিং এ রাখা হলো
       setPendingSignal(result);
     } catch (e) {
-      console.error("AI Analysis Failed", e);
       setIsAnalyzing(false);
     }
   }, [candles, selectedAsset]);
 
   const handleGetSignal = () => {
-    // ১৫ সেকেন্ডের কম সময় না থাকলে বাটন কাজ করবে না
     if (isAnalyzing || candleCountdown > 15) return;
-    
     setIsAnalyzing(true);
     setCurrentSignal(null);
     setPendingSignal(null);
-    
-    // এআই কল শুরু
     triggerAICall();
   };
 
-  // রিয়েল-টাইম ডাটা কানেকশন
+  const handleManualConnect = () => setHasKey(true);
+
   useEffect(() => {
     if (ws.current) ws.current.close();
     const socket = new WebSocket('wss://ws.binaryws.com/websockets/v3?app_id=1089');
@@ -187,12 +175,12 @@ const App: React.FC = () => {
   if (hasKey === false) {
     return (
       <div className="min-h-screen bg-[#0b0e11] flex flex-col items-center justify-center p-8 text-center">
-        <div className="w-16 h-16 bg-indigo-500/20 rounded-2xl flex items-center justify-center mb-6 animate-pulse">
+        <div className="w-16 h-16 bg-indigo-500/20 rounded-2xl flex items-center justify-center mb-6">
            <span className="text-3xl">📊</span>
         </div>
-        <h1 className="text-xl font-bold mb-4">SAKIB AI SIGNAL</h1>
-        <p className="text-gray-400 text-[10px] mb-8 uppercase tracking-widest">Premium AI Access Required</p>
-        <button onClick={() => window.aistudio.openSelectKey()} className="bg-indigo-600 hover:bg-indigo-500 text-white px-8 py-3 rounded-xl font-bold shadow-lg transition-all active:scale-95">
+        <h1 className="text-2xl font-bold mb-2 uppercase tracking-tighter">SAKIB AI SIGNAL</h1>
+        <p className="text-gray-500 text-[10px] mb-8 uppercase tracking-widest">Premium AI Access Required</p>
+        <button onClick={handleManualConnect} className="bg-indigo-600 hover:bg-indigo-500 text-white px-10 py-4 rounded-xl font-bold shadow-xl active:scale-95 transition-all">
           CONNECT API KEY
         </button>
       </div>
@@ -201,87 +189,62 @@ const App: React.FC = () => {
 
   return (
     <div className="min-h-screen bg-[#0b0e11] text-white p-3 select-none overflow-x-hidden pb-10">
-      
-      {/* স্ট্যাটাস বার */}
       <div className="grid grid-cols-3 gap-2 mb-4">
-        <div className="bg-white/5 backdrop-blur-md p-2.5 rounded-xl border border-white/5 flex flex-col items-center">
-          <span className="text-[8px] text-gray-500 uppercase font-black">Accuracy</span>
+        <div className="bg-white/5 p-2.5 rounded-xl border border-white/5 flex flex-col items-center">
+          <span className="text-[8px] text-gray-500 font-black uppercase">Win Rate</span>
           <span className="text-sm font-black text-emerald-400">
             {stats.totalSignals > 0 ? ((stats.correctSignals / stats.totalSignals) * 100).toFixed(1) : "0.0"}%
           </span>
         </div>
         <div className="bg-white/5 p-2.5 rounded-xl border border-white/5 flex flex-col items-center">
-          <span className="text-[8px] text-gray-500 uppercase font-black">Signals</span>
+          <span className="text-[8px] text-gray-500 font-black uppercase">Total</span>
           <span className="text-sm font-black text-indigo-400">{stats.totalSignals}</span>
         </div>
         <div className="bg-white/5 p-2.5 rounded-xl border border-white/5 flex flex-col items-center">
-          <span className="text-[8px] text-gray-500 uppercase font-black">Correct</span>
+          <span className="text-[8px] text-gray-500 font-black uppercase">Result</span>
           <span className="text-sm font-black text-blue-400">{stats.correctSignals}</span>
         </div>
       </div>
 
-      {/* টাইম ডিসপ্লে */}
-      <div className="flex justify-between items-center mb-4 bg-white/5 p-4 rounded-2xl border border-white/10 shadow-xl">
+      <div className="flex justify-between items-center mb-4 bg-white/5 p-4 rounded-2xl border border-white/10">
         <div>
-          <span className="text-gray-500 text-[9px] font-black uppercase tracking-widest">{selectedAsset.name}</span>
+          <span className="text-gray-500 text-[9px] font-black uppercase">{selectedAsset.name}</span>
           <p className="text-xl font-black text-white font-mono mt-1">{marketTime}</p>
         </div>
         <div className="text-right">
-          <span className="text-gray-500 text-[9px] font-black uppercase tracking-widest">Next Candle</span>
+          <span className="text-gray-500 text-[9px] font-black uppercase">Countdown</span>
           <p className={`text-2xl font-black font-mono mt-1 ${candleCountdown <= 10 ? 'text-rose-500 animate-pulse' : 'text-emerald-400'}`}>
             :{candleCountdown < 10 ? `0${candleCountdown}` : candleCountdown}
           </p>
         </div>
       </div>
 
-      {/* কারেন্সি বাটন গ্রিড */}
-      <div className="grid grid-cols-4 gap-2 mb-4 max-h-[140px] overflow-y-auto no-scrollbar py-1">
+      <div className="grid grid-cols-4 gap-2 mb-4 max-h-[140px] overflow-y-auto no-scrollbar">
         {ASSETS.map(asset => (
-          <button 
-            key={asset.id} 
-            onClick={() => { setSelectedAsset(asset); localStorage.setItem(ASSET_KEY, asset.id); setCandles([]); setCurrentSignal(null); }} 
-            className={`py-3 px-2 rounded-xl text-[9px] font-black border transition-all flex flex-col items-center gap-1 ${selectedAsset.id === asset.id ? 'bg-indigo-600 border-indigo-400 shadow-lg' : 'bg-[#1c2127] border-white/5 text-gray-500'}`}
-          >
+          <button key={asset.id} onClick={() => { setSelectedAsset(asset); localStorage.setItem(ASSET_KEY, asset.id); setCandles([]); setCurrentSignal(null); }} className={`py-3 px-2 rounded-xl text-[9px] font-black border transition-all flex flex-col items-center gap-1 ${selectedAsset.id === asset.id ? 'bg-indigo-600 border-indigo-400' : 'bg-[#1c2127] border-white/5 text-gray-500'}`}>
             <span className="text-lg">{asset.icon}</span>
             <span className="truncate w-full text-center">{asset.name}</span>
           </button>
         ))}
       </div>
 
-      <TradingChart 
-        candles={candles} 
-        assetName={selectedAsset.name} 
-        precision={selectedAsset.precision} 
-        currentPrice={candles[candles.length - 1]?.close || 0} 
-        currentSignal={currentSignal}
-        showIndicators={showIndicators}
-      />
+      <TradingChart candles={candles} assetName={selectedAsset.name} precision={selectedAsset.precision} currentPrice={candles[candles.length - 1]?.close || 0} currentSignal={currentSignal} showIndicators={showIndicators} />
 
-      {/* মেইন সিগন্যাল বাটন লজিক */}
       <div className="mt-6">
         <button 
           onClick={handleGetSignal} 
           disabled={isAnalyzing || candleCountdown > 15 || candles.length < 50} 
-          className={`w-full py-7 rounded-2xl font-black text-xl uppercase transition-all shadow-xl border-b-8 flex flex-col items-center justify-center gap-1 ${
-            isAnalyzing ? 'bg-amber-600 text-white border-amber-800 animate-pulse' : 
-            (candleCountdown <= 15) ? 'bg-indigo-600 text-white border-indigo-800 hover:bg-indigo-500 active:translate-y-2 active:border-b-4' : 
-            'bg-gray-800 text-gray-500 border-gray-900 opacity-40 cursor-not-allowed'
+          className={`w-full py-7 rounded-2xl font-black text-xl uppercase transition-all shadow-xl border-b-8 flex flex-col items-center justify-center ${
+            isAnalyzing ? 'bg-amber-600 border-amber-800 animate-pulse' : 
+            (candleCountdown <= 15) ? 'bg-indigo-600 border-indigo-800 active:translate-y-2' : 
+            'bg-gray-800 border-gray-900 opacity-40'
           }`}
         >
-          {isAnalyzing ? "WAITING FOR :00s..." : (candleCountdown <= 15 ? "GET SURE SHOT" : `WAIT FOR :${candleCountdown - 15}s`)}
+          {isAnalyzing ? "WAITING FOR :00s" : (candleCountdown <= 15 ? "GET SURE SHOT" : `WAIT FOR :${candleCountdown - 15}s`)}
         </button>
-        {isAnalyzing && !currentSignal && (
-            <p className="text-[10px] text-center mt-3 text-indigo-400 font-bold animate-bounce uppercase tracking-tighter">
-                AI is analyzing... Signal will pop up at :00 seconds
-            </p>
-        )}
       </div>
 
       <SignalDashboard signal={currentSignal} isAnalyzing={isAnalyzing} onVote={handleVote} />
-
-      <div className="mt-6 text-center opacity-30">
-        <button onClick={() => window.aistudio.openSelectKey()} className="text-[9px] text-gray-400 uppercase font-black tracking-widest hover:text-indigo-400">⚙️ SYNC SAKIB AI</button>
-      </div>
     </div>
   );
 };
