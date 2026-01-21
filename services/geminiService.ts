@@ -1,8 +1,8 @@
-import { GoogleGenerativeAI } from "@google/generative-ai";
+import { GoogleGenerativeAI, SchemaType } from "@google/generative-ai";
 import { Candle, Signal } from "../types";
 import { EXPIRY_DURATION_MS } from "../components/constants";
 
-// আপনার দেওয়া নতুন এপিআই কি
+// আপনার দেওয়া এপিআই কি সরাসরি এখানে বসানো হয়েছে
 const API_KEY = "AIzaSyCjYEsrNHyoIqKekROjVE8Grzix8m5jJ1o";
 
 export const analyzeMarket = async (
@@ -11,7 +11,7 @@ export const analyzeMarket = async (
   indicators: any
 ): Promise<Signal> => {
   
-  // Google GenAI Initialize
+  // SDK ইনিশিয়ালাইজেশন
   const genAI = new GoogleGenerativeAI(API_KEY);
   
   const recentCandles = candles.slice(-30);
@@ -19,58 +19,61 @@ export const analyzeMarket = async (
     return `${c.close > c.open ? 'G' : 'R'}:${c.close.toFixed(5)}`;
   }).join('|');
 
-  // ১০০+ ইন্ডিকেটর ডেটা যা এআই বিশ্লেষণ করবে
+  // টেকনিক্যাল ডেটা যা এআই বিশ্লেষণ করবে
   const technicalContext = `
-    MARKET: ${assetName}, TREND: ${indicators.trend || 'N/A'}, PATTERN: ${indicators.detectedPattern || 'Scanning'}
-    MMTUM: ${indicators.momentum?.toFixed(5) || 0}, ATR: ${indicators.atr?.toFixed(5) || 0}, ADX_PWR: ${indicators.trendStrength?.toFixed(2) || 0}
+    MARKET: ${assetName}, TREND: ${indicators.trend || 'N/A'}, PATTERN: ${indicators.detectedPattern || 'N/A'}
+    MMTUM: ${indicators.momentum?.toFixed(5)}, ATR: ${indicators.atr?.toFixed(5)}, ADX_PWR: ${indicators.trendStrength?.toFixed(2)}
     MA CLUSTER: EMA8(${indicators.ema8?.toFixed(5)}), EMA21(${indicators.ema21?.toFixed(5)}), EMA50(${indicators.ema50?.toFixed(5)}), EMA200(${indicators.ema200?.toFixed(5)})
-    MACD: Hist(${indicators.macdH?.toFixed(6) || 0})
-    RSI: ${indicators.rsi?.toFixed(2) || 50}, W%R: ${indicators.williamsR?.toFixed(2) || -50}
-    FIBONACCI: 0.618(${indicators.fib618?.toFixed(5) || 'N/A'})
+    MACD: Line(${indicators.macdLine?.toFixed(6)}), Hist(${indicators.macdHist?.toFixed(6)})
+    OSCILLATORS: RSI(${indicators.rsi?.toFixed(2)}), StochK(${indicators.stochK?.toFixed(2)}), W%R(${indicators.williamsR?.toFixed(2)})
+    FIBONACCI: 0.618(${indicators.fib618?.toFixed(5)}), 0.5(${indicators.fib50?.toFixed(5)})
     S/R LEVELS: R1(${indicators.pivotR1?.toFixed(5)}), S1(${indicators.pivotS1?.toFixed(5)})
-    PSYCHOLOGY: BullPower(${indicators.bullPower?.toFixed(5)}), VolTrend(${indicators.volTrend})
+    PSYCHOLOGY: VolDelta(${indicators.forceIndex})
   `;
 
-  const systemInstruction = `You are "Quotex Sure Shot AI v20 Platinum Pro" specialized for "SAKIB AI SIGNAL" app. 
-  Your task: Analyze technical data, Fibonacci levels, and Chart Patterns to predict the EXACT direction of the NEXT 1-minute candle.
-  
-  ULTRA ANALYSIS LOGIC:
-  1. Fibonacci Rejection: Check price action at Fib 0.618 levels.
-  2. Pattern Breakout: Confirm if Triangle/Channel/Support is breaking.
-  3. Signal Strength: Only give CALL/PUT if confidence is above 90%.
-  4. Volume Confirmation: Ensure volume trend matches prediction.
+  const systemInstruction = `You are "Quotex Sure Shot AI v20 Platinum Pro". 
+  Your task: Analyze 100+ technical data points, Fibonacci levels, and Chart Patterns to predict the EXACT direction of the NEXT 1-minute candle.
   
   OUTPUT RULES:
   - CALL: Strong bullish signals.
   - PUT: Strong bearish signals.
   - NEUTRAL: If data is conflicting.
-  - JSON output ONLY. The "description" must be in Bengali (বাংলা) detailing the technical reason for the trade.`;
+  - JSON output ONLY. The "description" must be in Bengali (বাংলা) with detailed technical logic.`;
 
   try {
-    const model = genAI.getGenerativeModel({ 
-      model: "gemini-1.5-flash", // Using stable flash for consistency
-    });
-
-    const prompt = `Indicators & Patterns: ${technicalContext}. Recent Price Action: ${candleDataStr}. Predict next candle direction for SAKIB AI SIGNAL!`;
-
-    const result = await model.generateContent({
-      contents: [{ role: "user", parts: [{ text: prompt }] }],
+    // মডেল কনফিগারেশন এবং রেসপন্স স্কিমা
+    const model = genAI.getGenerativeModel({
+      model: "gemini-1.5-flash", // বর্তমানের সবচেয়ে ফাস্ট এবং স্টেবল মডেল
       generationConfig: {
         responseMimeType: "application/json",
+        responseSchema: {
+          type: SchemaType.OBJECT,
+          properties: {
+            type: { type: SchemaType.STRING, enum: ["CALL", "PUT", "NEUTRAL"] },
+            pattern: { type: SchemaType.STRING },
+            confidence: { type: SchemaType.NUMBER },
+            description: { type: SchemaType.STRING }
+          },
+          required: ["type", "pattern", "confidence", "description"]
+        }
       },
-      systemInstruction: systemInstruction
+      systemInstruction: systemInstruction,
     });
 
-    const responseText = result.response.text();
-    const data = JSON.parse(responseText || '{}');
+    const result = await model.generateContent(
+      `Indicators & Patterns: ${technicalContext}. Recent Price Action: ${candleDataStr}. Predict next candle accurately!`
+    );
+
+    const response = result.response;
+    const data = JSON.parse(response.text());
 
     return {
       id: 'ss-' + Date.now(),
       type: data.type || 'NEUTRAL',
-      pattern: data.pattern || 'Technical Breakout',
-      category: 'Sure Shot V20 Platinum',
+      pattern: data.pattern || 'Technical Analysis',
+      category: 'SAKIB AI Sure Shot',
       confidence: data.confidence || 95,
-      description: data.description || 'মার্কেট ট্রেন্ড এবং ফিবোনাচি লেভেল অনুযায়ী পরবর্তী মুভমেন্ট ফলো করুন।',
+      description: data.description || 'মার্কেট ট্রেন্ড অনুযায়ী পরবর্তী মুভমেন্ট ফলো করুন।',
       time: Date.now(),
       expiresAt: Date.now() + EXPIRY_DURATION_MS
     };
@@ -85,7 +88,7 @@ export const analyzeMarket = async (
       confidence: 0,
       time: Date.now(),
       expiresAt: Date.now() + 10000,
-      description: 'সার্ভার রেসপন্স করছে না বা এপিআই কি কাজ করছে না। আবার চেষ্টা করুন।'
+      description: 'সার্ভার রেসপন্স করছে না। এপিআই কি অথবা নেটওয়ার্ক চেক করুন।'
     };
   }
 };
